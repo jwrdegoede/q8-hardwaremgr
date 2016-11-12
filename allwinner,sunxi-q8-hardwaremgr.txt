@@ -1,0 +1,71 @@
+Q8 tablet hardware manager
+--------------------------
+
+Allwinnner A13 / A23 / A33 based Q8 tablets are popular cheap 7" tablets of
+which a new batch is produced every few weeks. Each batch uses a different
+mix of touchscreen, accelerometer and wifi peripherals.
+
+Given that each batch is different creating a devicetree for each variant is
+not desirable. The Q8 tablet hardware manager bindings are bindings for an os
+module which auto-detects the touchscreen and accelerometer so that a single
+generic dts can be used for these tablets.
+
+The wifi is connected to a discoverable bus and will be autodetected by the os.
+
+Required properties:
+ - toplevel / machine compatible, one of:
+	"allwinner,q8-a13"
+	"allwinner,q8-a23"
+	"allwinner,q8-a33"
+ - touchscreen node   : There must be a template touchscreen node named
+			"touchscreen", this must be a child node of the
+			touchscreen i2c bus
+ - accelerometer node : There must be a template accelerometer node named
+			"accelerometer", this must be a child node of the
+			accelerometer i2c bus
+
+touchscreen node required properties:
+ - interrupt-parent   : phandle pointing to the interrupt controller
+			serving the touchscreen interrupt
+ - interrupts         : interrupt specification for the touchscreen interrupt
+ - power-gpios        : Specification for the pin connected to the touchscreen's
+			enable / wake pin. This needs to be driven high to
+			enable the touchscreen controller
+
+touchscreen node optional properties:
+ - vddio-supply       : regulator phandle for the touchscreen vddio supply
+
+accelerometer node optional properties:
+ - interrupt-parent   : phandle pointing to the interrupt controller
+			serving the accelerometer interrupt
+ - interrupts         : interrupt specification for the accelerometer interrupt
+
+Example:
+
+/ {
+	compatible = "allwinner,q8-a23", "allwinner,sun8i-a23";
+};
+
+&i2c0 {
+	touchscreen: touchscreen@0 {
+		interrupt-parent = <&pio>;
+		interrupts = <1 5 IRQ_TYPE_EDGE_FALLING>; /* PB5 */
+		power-gpios = <&pio 7 1 GPIO_ACTIVE_HIGH>; /* PH1 */
+		vddio-supply = <&reg_ldo_io1>;
+		/*
+		 * Enabled by sunxi-q8-hardwaremgr if it detects a
+		 * known model touchscreen.
+		 */
+		status = "disabled";
+	};
+};
+
+&i2c1 {
+	accelerometer: accelerometer@0 {
+		/*
+		 * Enabled by sunxi-q8-hardwaremgr if it detects a
+		 * known model accelerometer.
+		 */
+		status = "disabled";
+	};
+};
