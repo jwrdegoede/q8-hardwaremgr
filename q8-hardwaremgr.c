@@ -23,7 +23,10 @@
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/regulator/driver.h> /* For constaints hack */
+#include <linux/regulator/machine.h> /* For constaints hack */
 #include <linux/slab.h>
+#include "of-changeset-helpers.h"
 
 /*
  * We can detect which touchscreen controller is used automatically,
@@ -151,6 +154,25 @@ struct q8_hardwaremgr_data {
 	int touchscreen_swap_x_y;
 	const char *touchscreen_fw_name;
 	bool has_rda599x;
+};
+
+/*
+ * HACK HACK HACK this is a regulator-core private struct,
+ * this must be in sync with the kernel's drivers/regulator/internal.h
+ * definition.
+ */
+struct regulator {
+	struct device *dev;
+	struct list_head list;
+	unsigned int always_on:1;
+	unsigned int bypass:1;
+	int uA_load;
+	int min_uV;
+	int max_uV;
+	char *supply_name;
+	struct device_attribute dev_attr;
+	struct regulator_dev *rdev;
+	/* Real regulator struct has more entires here */
 };
 
 typedef int (*bus_probe_func)(struct q8_hardwaremgr_data *data,
@@ -852,6 +874,154 @@ put_node:
 	return ret;
 }
 
+/*
+ * sun5i-a13-q8-tablet.dts on kernel 4.8 is missing the touchscreen
+ * template node, add it.
+ */
+static int q8_hardwaremgr_add_touchscreen_node(struct q8_hardwaremgr_data *data)
+{
+	/* FIXME */
+	return 0;
+}
+
+/*
+ * Originally the q8-hwmgr design was for the dt to already have a template
+ * touchscreen node on the right i2c bus, but since q8-hwmgr is not (yet?)
+ * upstream that node may be missing or incomplete
+ */
+static int q8_hardwaremgr_fixup_touchscreen_node(
+	struct q8_hardwaremgr_data *data)
+{
+	struct device_node *ts_np, *reg_np = NULL;
+	struct property *prop;
+	struct of_changeset cset;
+	struct regulator *reg;
+	int ret = 0;
+
+	if (data->soc == a13)
+		return q8_hardwaremgr_add_touchscreen_node(data);
+
+	ts_np = of_find_node_by_name(of_root, "touchscreen");
+	reg_np = of_find_node_by_name(of_root, "ldo_io1");
+	if (!ts_np || !reg_np) {
+		dev_err(data->dev,
+			"Error dt-nodes missing touchscreen %p, ldo_io1 %p\n",
+			ts_np, reg_np);
+		ret = -EINVAL;
+		goto out_put_np;
+	}
+
+	reg = regulator_get_optional(NULL, "ldo_io1");
+	if (IS_ERR(reg)) {
+		ret = PTR_ERR(reg);
+		if (ret != -EPROBE_DEFER)
+			dev_err(data->dev, "Error could not get ldo_io1 regulator %d\n",
+				ret);
+		goto out_put_np;
+	}
+
+	if (!reg->rdev->dev.of_node) {
+		reg->rdev->dev.of_node = reg_np;
+	} else if (reg->rdev->dev.of_node != reg_np) {
+		dev_err(data->dev, "Error ldo_io1 dt-node mismatch\n");
+		goto out_put_reg;
+	}
+
+	/* See if the constraints are already set */
+	prop = of_find_property(reg_np, "regulator-min-microvolt", NULL);
+	if (prop)
+		goto add_touchscreen_supply_prop;
+
+	of_changeset_init(&cset);
+	of_changeset_add_property_u32(&cset, reg_np, "regulator-min-microvolt",
+				      3300000);
+	of_changeset_add_property_u32(&cset, reg_np, "regulator-max-microvolt",
+				      3300000);
+	of_changeset_update_property_string(&cset, reg_np, "regulator-name", "vcc-touchscreen");
+	of_changeset_update_property_string(&cset, reg_np, "status", "okay");
+	of_changeset_apply(&cset);
+	of_changeset_destroy(&cset);
+
+	/*
+	 * HACK HACK HACK update the constraints after the regulator core
+	 * has already set them from the incomplete dt.
+	 */
+	reg->rdev->constraints->min_uV = 3300000;
+	reg->rdev->constraints->max_uV = 3300000;
+	reg->rdev->constraints->name = kstrdup("vcc-touchscreen", GFP_KERNEL);
+	reg->rdev->constraints->valid_ops_mask |=
+		REGULATOR_CHANGE_VOLTAGE | REGULATOR_CHANGE_STATUS;
+
+	ret = regulator_set_voltage(reg, 3300000, 3300000);
+	if (ret) {
+		dev_err(data->dev, "Error setting ldo_io1 voltage %d\n", ret);
+		goto out_put_reg;
+	}
+
+add_touchscreen_supply_prop:
+	/* See if the supply are already set */
+	prop = of_find_property(ts_np, "vddio-supply", NULL);
+	if (prop)
+		goto out_put_reg;
+
+	/* The reg_np may not have a phandle */
+	if (!reg_np->phandle)
+		reg_np->phandle = of_gen_phandle();
+
+	of_changeset_init(&cset);
+	/* The regulator phandle has no args */
+	of_changeset_add_property_u32(&cset, ts_np, "vddio-supply",
+				      reg_np->phandle);
+	of_changeset_apply(&cset);
+	of_changeset_destroy(&cset);
+
+out_put_reg:
+	regulator_put(reg);
+out_put_np:
+	of_node_put(reg_np);
+	of_node_put(ts_np);
+	return ret;
+}
+
+/*
+ * Originally the q8-hwmgr design was for the dt to already have an empty
+ * accel node on the right i2c bus, but since q8-hwmgr is not (yet?) upstream
+ * that node may be missing.
+ */
+static int q8_hardwaremgr_add_accel_node(struct q8_hardwaremgr_data *data)
+{
+	struct device_node *np, *parent;
+	struct of_changeset cset;
+	int ret = 0;
+
+	np = of_find_node_by_name(of_root, "accelerometer");
+	if (np) {
+		of_node_put(np);
+		return 0; /* accelerometer node already exists */
+	}
+
+	parent = of_find_node_by_path("/soc@01c00000/i2c@01c2b000");
+	if (!parent) {
+		dev_err(data->dev, "Error i2c1 node is missing\n");
+		return -EINVAL;
+	}
+
+	of_changeset_init(&cset);
+	np = of_changeset_create_device_node(&cset, parent, "accelerometer");
+	if (IS_ERR(np)) {
+		ret = PTR_ERR(np);
+		goto out;
+	}
+	of_changeset_add_property_string(&cset, np, "name", "accelerometer");
+	of_changeset_add_property_string(&cset, np, "status", "disabled");
+	of_changeset_attach_node(&cset, np);
+	of_changeset_apply(&cset);
+out:
+	of_changeset_destroy(&cset);
+	of_node_put(parent);
+	return ret;
+}
+
 static int q8_hardwaremgr_probe(struct platform_device *pdev)
 {
 	struct q8_hardwaremgr_data *data;
@@ -863,6 +1033,14 @@ static int q8_hardwaremgr_probe(struct platform_device *pdev)
 
 	data->dev = &pdev->dev;
 	data->soc = (long)pdev->dev.platform_data;
+
+	ret = q8_hardwaremgr_fixup_touchscreen_node(data);
+	if (ret)
+		goto error;
+
+	ret = q8_hardwaremgr_add_accel_node(data);
+	if (ret)
+		goto error;
 
 	ret = q8_hardwaremgr_do_probe(data, &data->touchscreen, "touchscreen",
 				      q8_hardwaremgr_probe_touchscreen);
