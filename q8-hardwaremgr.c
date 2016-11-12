@@ -743,9 +743,11 @@ static int q8_hardwaremgr_do_probe(struct q8_hardwaremgr_data *data,
 				   const char *prefix, bus_probe_func func)
 {
 	struct device_node *np;
+	struct pinctrl *pinctrl;
 	struct i2c_adapter *adap;
 	struct regulator *reg;
 	struct gpio_desc *gpio;
+	
 	int ret = 0;
 
 	np = of_find_node_by_name(of_root, prefix);
@@ -760,14 +762,28 @@ static int q8_hardwaremgr_do_probe(struct q8_hardwaremgr_data *data,
 	 */
 	data->dev->of_node = np;
 
-	ret = pinctrl_bind_pins(data->dev);
-	if (ret)
-		goto put_node;
+	pinctrl = pinctrl_get(data->dev);
+	if (IS_ERR(pinctrl)) {
+		ret = PTR_ERR(pinctrl);
+		if (ret == -EPROBE_DEFER)
+			goto put_node;
+		pinctrl = NULL;
+	}
+
+	if (pinctrl) {	
+		struct pinctrl_state *state = 
+			pinctrl_lookup_state(pinctrl, PINCTRL_STATE_DEFAULT);
+		if (!IS_ERR(state)) {
+			ret = pinctrl_select_state(pinctrl, state);
+			if (ret == -EPROBE_DEFER)
+				goto put_pinctrl;
+		}
+	}
 
 	adap = of_get_i2c_adapter_by_node(np->parent);
 	if (!adap) {
 		ret = -EPROBE_DEFER;
-		goto put_pins;
+		goto put_pinctrl;
 	}
 
 	reg = regulator_get_optional(data->dev, "vddio");
@@ -826,14 +842,9 @@ put_reg:
 put_adapter:
 	i2c_put_adapter(adap);
 
-put_pins:
-	/* Undo our manual pinctrl_bind_pins() */
-	if (data->dev->pins) {
-		devm_pinctrl_put(data->dev->pins->p);
-		devm_kfree(data->dev, data->dev->pins);
-		data->dev->pins = NULL;
-	}
-
+put_pinctrl:
+	if (pinctrl)
+		pinctrl_put(pinctrl);
 put_node:
 	data->dev->of_node = NULL;
 	of_node_put(np);
