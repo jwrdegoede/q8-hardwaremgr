@@ -842,7 +842,9 @@ static int q8_hardwaremgr_do_probe(struct q8_hardwaremgr_data *data,
 		dev_info(data->dev, "Probing %s with a regulator\n", prefix);
 		ret = func(data, adap);
 
+#if 0 /* 4.9 silead driver lacks regulator support, leave it enabled */
 		regulator_disable(reg);
+#endif
 	} else if (reg)
 		dev->delete_regulator = true; /* Regulator not needed */
 
