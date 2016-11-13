@@ -1066,11 +1066,18 @@ error:
 	return ret;
 }
 
+static int q8_hardwaremgr_remove(struct platform_device *pdev)
+{
+	/* Nothing todo */
+	return 0;
+}
+
 static struct platform_driver q8_hardwaremgr_driver = {
 	.driver = {
 		.name	= "q8-hwmgr",
 	},
 	.probe	= q8_hardwaremgr_probe,
+	.remove = q8_hardwaremgr_remove,
 };
 
 static int __init q8_hardwaremgr_init(void)
