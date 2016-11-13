@@ -13,3 +13,4 @@ clean:
 install:
 	install -D -m 644 q8-hardwaremgr.ko $(MDEST)
 	echo "q8-hardwaremgr" > /etc/modules-load.d/q8-hardwaremgr.conf
+	depmod -a
