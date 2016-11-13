@@ -3,6 +3,9 @@
 
 #include <linux/of.h>
 
+/* HACK to not build these against my sunxi-wip tree */
+#ifndef OF_HAVE_CHANGESET_HELPERS
+
 /*
  * Copied from drivers/of/base.c and drivers/of/dynamic.c
  * for use in changeset helpers, this entire file should be dropped
@@ -543,6 +546,8 @@ static inline int of_changeset_update_property_bool(struct of_changeset *ocs,
 	return __of_changeset_add_update_property_copy(ocs, np, name, "", 0,
 			true);
 }
+
+#endif
 
 static inline phandle of_gen_phandle(void)
 {
