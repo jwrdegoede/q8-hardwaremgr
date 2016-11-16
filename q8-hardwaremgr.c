@@ -26,6 +26,7 @@
 #include <linux/regulator/driver.h> /* For constaints hack */
 #include <linux/regulator/machine.h> /* For constaints hack */
 #include <linux/slab.h>
+#include <linux/version.h>
 #include "of-changeset-helpers.h"
 
 /*
@@ -156,6 +157,7 @@ struct q8_hardwaremgr_data {
 	bool has_rda599x;
 };
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 /*
  * HACK HACK HACK this is a regulator-core private struct,
  * this must be in sync with the kernel's drivers/regulator/internal.h
@@ -174,6 +176,7 @@ struct regulator {
 	struct regulator_dev *rdev;
 	/* Real regulator struct has more entires here */
 };
+#endif
 
 typedef int (*bus_probe_func)(struct q8_hardwaremgr_data *data,
 			      struct i2c_adapter *adap);
@@ -842,7 +845,8 @@ static int q8_hardwaremgr_do_probe(struct q8_hardwaremgr_data *data,
 		dev_info(data->dev, "Probing %s with a regulator\n", prefix);
 		ret = func(data, adap);
 
-#if 0 /* 4.9 silead driver lacks regulator support, leave it enabled */
+/* 4.9 silead driver lacks regulator support, leave it enabled */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 		regulator_disable(reg);
 #endif
 	} else if (reg)
@@ -914,6 +918,8 @@ static int q8_hardwaremgr_fixup_touchscreen_node(
 	}
 
 	reg = regulator_get_optional(NULL, "ldo_io1");
+	if (IS_ERR(reg) && PTR_ERR(reg) == -ENODEV)
+		reg = regulator_get_optional(NULL, "vcc-touchscreen");
 	if (IS_ERR(reg)) {
 		ret = PTR_ERR(reg);
 		if (ret != -EPROBE_DEFER)
@@ -922,6 +928,7 @@ static int q8_hardwaremgr_fixup_touchscreen_node(
 		goto out_put_np;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 	if (!reg->rdev->dev.of_node) {
 		reg->rdev->dev.of_node = reg_np;
 	} else if (reg->rdev->dev.of_node != reg_np) {
@@ -961,6 +968,7 @@ static int q8_hardwaremgr_fixup_touchscreen_node(
 	}
 
 add_touchscreen_supply_prop:
+#endif
 	/* See if the supply are already set */
 	prop = of_find_property(ts_np, "vddio-supply", NULL);
 	if (prop)
